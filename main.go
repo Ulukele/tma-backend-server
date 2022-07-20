@@ -5,6 +5,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"log"
+	"os"
 	"strconv"
 	"strings"
 )
@@ -13,7 +14,10 @@ func main() {
 	app := fiber.New()
 	app.Use(cors.New())
 
-	server, err := NewServer("http://localhost:8081/api", "http://localhost:8080/api")
+	server, err := NewServer(
+		os.Getenv("C_BACKEND_URL")+"api",
+		os.Getenv("A_BACKEND_URL")+"api",
+	)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -56,5 +60,5 @@ func main() {
 		return c.Send(content)
 	})
 
-	log.Fatal(app.Listen(":8082"))
+	log.Fatal(app.Listen(os.Getenv("LISTEN_ON")))
 }

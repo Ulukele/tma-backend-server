@@ -3,12 +3,13 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
 )
 
-func (s *Server) requestContent(method string, path string, data []byte, usernameHeader string) ([]byte, error) {
+func (s *Server) requestContent(method string, path string, data []byte, headers map[string]string) ([]byte, error) {
 	fullPath := s.contentURL + path
 
 	var req *http.Request
@@ -20,13 +21,15 @@ func (s *Server) requestContent(method string, path string, data []byte, usernam
 		req, err = http.NewRequest(http.MethodPost, fullPath, bytes.NewBuffer(data))
 	} else if method == http.MethodDelete {
 		req, err = http.NewRequest(http.MethodDelete, fullPath, bytes.NewBuffer(data))
+	} else {
+		return nil, fmt.Errorf("method don't supported")
 	}
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if usernameHeader != "" {
-		req.Header.Set("Username", usernameHeader)
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
 
 	var res *http.Response
@@ -42,16 +45,14 @@ func (s *Server) requestContent(method string, path string, data []byte, usernam
 		return nil, err
 	}
 
-	if res.StatusCode != 200 {
-		log.Printf("got %d status code from content. body: %s", res.StatusCode, body)
-		return nil, err
-	}
-
 	return body, nil
 }
 
 func (s *Server) getUserFull(username string) (*UserRespFull, error) {
-	content, err := s.requestContent("GET", "/internal/user/", nil, username)
+	headers := make(map[string]string)
+	headers["Username"] = username
+
+	content, err := s.requestContent(http.MethodGet, "api/internal/user/", nil, headers)
 	if err != nil {
 		return nil, err
 	}
@@ -64,15 +65,11 @@ func (s *Server) getUserFull(username string) (*UserRespFull, error) {
 }
 
 func (s *Server) registerUser(username string, password string) (*UserResp, error) {
-	type UserReq struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-	}
-	marshal, err := json.Marshal(&UserReq{Username: username, Password: password})
+	marshal, err := json.Marshal(&AuthRequest{Username: username, Password: password})
 	if err != nil {
 		return nil, err
 	}
-	content, err := s.requestContent("POST", "/public/user/", marshal, "")
+	content, err := s.requestContent(http.MethodPost, "api/public/user/", marshal, nil)
 	if err != nil {
 		return nil, err
 	}

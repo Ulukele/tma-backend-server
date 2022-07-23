@@ -1,9 +1,11 @@
 package main
 
 import (
-	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cors"
 	"log"
+	"os"
+	"strconv"
 )
 
 type Server struct {
@@ -11,66 +13,59 @@ type Server struct {
 	authURL    string
 }
 
-// Validator
-var validate = validator.New()
-
 func NewServer(contentURL string, authURL string) (*Server, error) {
 	s := &Server{}
+	log.Printf("set content api url to %s", contentURL)
 	s.contentURL = contentURL
+	log.Printf("set auth api url to %s", authURL)
 	s.authURL = authURL
 
 	return s, nil
 }
 
-func (s *Server) HandleSignIn(c *fiber.Ctx) error {
-	log.Printf("handle sign-in at %s", c.Path())
-	req := AuthRequest{}
-	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "expect username and password")
-	}
-	err := validate.Struct(req)
-	if err != nil {
-		log.Printf("validation error: %s", err.Error())
-		return fiber.NewError(fiber.StatusBadRequest, "validation error")
-	}
+func (s *Server) StartApp() error {
+	app := fiber.New()
+	app.Use(cors.New())
 
-	res, err := s.getUserFull(req.Username)
-	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "no such user")
-	}
-	if res.Username != req.Username || res.Password != req.Password {
-		return fiber.NewError(fiber.StatusBadRequest, "wrong username or password")
-	}
+	apiGroup := app.Group("/api/v1/")
 
-	auth, err := s.requestSignIn(res.Username, res.UserId, res.Password)
-	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "can't create jwt")
-	}
+	authGroup := apiGroup.Group("/auth/")
+	authGroup.All("/*", s.AccessAuthMiddleware)
 
-	return c.JSON(auth)
+	contentGroup := apiGroup.Group("/content/", s.AuthHeaderValidationMiddleware)
+	userGroup := contentGroup.Group("/user/")
+	teamGroup := contentGroup.Group("/team/")
+
+	userGroup.All("/*", s.AccessAuthMiddleware)
+	teamGroup.All("/*", s.AccessContentMiddleware)
+
+	return app.Listen(os.Getenv("LISTEN_ON"))
 }
 
-func (s *Server) HandleSignUp(c *fiber.Ctx) error {
-	log.Printf("handle sign-up at %s", c.Path())
-	req := AuthRequest{}
-	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "expect username and password")
-	}
-	err := validate.Struct(req)
+func (s *Server) AuthHeaderValidationMiddleware(c *fiber.Ctx) error {
+	jwt := c.Get("Bearer", "")
+	userInfo, err := s.requestValidation(jwt)
 	if err != nil {
-		log.Printf("validation error: %s", err.Error())
-		return fiber.NewError(fiber.StatusBadRequest, "validation error")
+		return fiber.NewError(fiber.StatusForbidden, "invalid jwt")
 	}
+	c.Locals("userId", userInfo.Id)
+	return c.Next()
+}
 
-	user, err := s.registerUser(req.Username, req.Password)
+func (s *Server) AccessContentMiddleware(c *fiber.Ctx) error {
+	headers := c.GetReqHeaders()
+	headers["UserId"] = strconv.Itoa(int(c.Locals("userId").(uint)))
+	content, err := s.requestContent(c.Method(), c.Path()[1:], c.Body(), headers)
 	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "can't register user")
+		return fiber.NewError(fiber.StatusBadRequest, "unable to forward")
 	}
+	return c.Send(content)
+}
 
-	auth, err := s.requestSignIn(user.Username, user.UserId, req.Password)
+func (s *Server) AccessAuthMiddleware(c *fiber.Ctx) error {
+	content, err := s.requestAuth(c.Method(), c.Path()[1:], c.Body(), c.GetReqHeaders())
 	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "can't create jwt")
+		return fiber.NewError(fiber.StatusBadRequest, "unable to forward")
 	}
-
-	return c.JSON(auth)
+	return c.Send(content)
 }

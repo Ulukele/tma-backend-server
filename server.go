@@ -1,21 +1,17 @@
 package main
 
 import (
-	"fmt"
-	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cors"
 	"log"
+	"os"
 	"strconv"
-	"strings"
 )
 
 type Server struct {
 	contentURL string
 	authURL    string
 }
-
-// Validator
-var validate = validator.New()
 
 func NewServer(contentURL string, authURL string) (*Server, error) {
 	s := &Server{}
@@ -27,57 +23,23 @@ func NewServer(contentURL string, authURL string) (*Server, error) {
 	return s, nil
 }
 
-func (s *Server) HandleSignIn(c *fiber.Ctx) error {
-	log.Printf("handle sign-in at %s", c.Path())
-	req := AuthRequest{}
-	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "expect username and password")
-	}
-	err := validate.Struct(req)
-	if err != nil {
-		log.Printf("validation error: %s", err.Error())
-		return fiber.NewError(fiber.StatusBadRequest, "validation error")
-	}
+func (s *Server) StartApp() error {
+	app := fiber.New()
+	app.Use(cors.New())
 
-	res, err := s.getUserFull(req.Username)
-	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "no such user")
-	}
-	if res.Username != req.Username || res.Password != req.Password {
-		return fiber.NewError(fiber.StatusBadRequest, "wrong username or password")
-	}
+	apiGroup := app.Group("/api/v1/")
 
-	auth, err := s.requestSignIn(res.Username, res.UserId)
-	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "can't create jwt")
-	}
+	authGroup := apiGroup.Group("/auth/")
+	authGroup.All("/*", s.AccessAuthMiddleware)
 
-	return c.JSON(auth)
-}
+	contentGroup := apiGroup.Group("/content/", s.AuthHeaderValidationMiddleware)
+	userGroup := contentGroup.Group("/user/")
+	teamGroup := contentGroup.Group("/team/")
 
-func (s *Server) HandleSignUp(c *fiber.Ctx) error {
-	log.Printf("handle sign-up at %s", c.Path())
-	req := AuthRequest{}
-	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "expect username and password")
-	}
-	err := validate.Struct(req)
-	if err != nil {
-		log.Printf("validation error: %s", err.Error())
-		return fiber.NewError(fiber.StatusBadRequest, "validation error")
-	}
+	userGroup.All("/*", s.AccessAuthMiddleware)
+	teamGroup.All("/*", s.AccessContentMiddleware)
 
-	user, err := s.registerUser(req.Username, req.Password)
-	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "can't register user")
-	}
-
-	auth, err := s.requestSignIn(user.Username, user.UserId)
-	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "can't create jwt")
-	}
-
-	return c.JSON(auth)
+	return app.Listen(os.Getenv("LISTEN_ON"))
 }
 
 func (s *Server) AuthHeaderValidationMiddleware(c *fiber.Ctx) error {
@@ -90,31 +52,18 @@ func (s *Server) AuthHeaderValidationMiddleware(c *fiber.Ctx) error {
 	return c.Next()
 }
 
-func (s *Server) IdentityValidationMiddleware(c *fiber.Ctx) error {
-	userIdAuth := c.Locals("userId").(uint)
-	userIdProvided, err := strconv.Atoi(c.Params("userId", ""))
+func (s *Server) AccessContentMiddleware(c *fiber.Ctx) error {
+	headers := c.GetReqHeaders()
+	headers["UserId"] = strconv.Itoa(int(c.Locals("userId").(uint)))
+	content, err := s.requestContent(c.Method(), c.Path()[1:], c.Body(), headers)
 	if err != nil {
-		return fiber.NewError(
-			fiber.StatusBadRequest,
-			fmt.Sprintf("no user with id=%s", c.Params("userId", "")),
-		)
+		return fiber.NewError(fiber.StatusBadRequest, "unable to forward")
 	}
-	if userIdAuth != uint(userIdProvided) {
-		return fiber.NewError(fiber.StatusForbidden, "jwt mismatch with user id")
-	}
-
-	return c.Next()
+	return c.Send(content)
 }
 
-func (s *Server) AccessContentMiddleware(c *fiber.Ctx) error {
-	// /api/content/...
-	keys := strings.Split(c.Path(), "/")
-	keys[1] = "api"
-	keys[2] = "public"
-
-	// api/public/...
-	newPath := strings.Join(keys[1:], "/")
-	content, err := s.requestContent(c.Method(), newPath, c.Body(), c.GetReqHeaders())
+func (s *Server) AccessAuthMiddleware(c *fiber.Ctx) error {
+	content, err := s.requestAuth(c.Method(), c.Path()[1:], c.Body(), c.GetReqHeaders())
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "unable to forward")
 	}

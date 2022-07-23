@@ -55,17 +55,23 @@ func (s *Server) AuthHeaderValidationMiddleware(c *fiber.Ctx) error {
 func (s *Server) AccessContentMiddleware(c *fiber.Ctx) error {
 	headers := c.GetReqHeaders()
 	headers["UserId"] = strconv.Itoa(int(c.Locals("userId").(uint)))
-	content, err := s.requestContent(c.Method(), c.Path()[1:], c.Body(), headers)
+	content, statusCode, err := s.requestContent(c.Method(), c.Path()[1:], c.Body(), headers)
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "unable to forward")
+	}
+	if statusCode != 200 {
+		return fiber.NewError(statusCode, string(content))
 	}
 	return c.Send(content)
 }
 
 func (s *Server) AccessAuthMiddleware(c *fiber.Ctx) error {
-	content, err := s.requestAuth(c.Method(), c.Path()[1:], c.Body(), c.GetReqHeaders())
+	content, statusCode, err := s.requestAuth(c.Method(), c.Path()[1:], c.Body(), c.GetReqHeaders())
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "unable to forward")
+	}
+	if statusCode != 200 {
+		return fiber.NewError(statusCode, string(content))
 	}
 	return c.Send(content)
 }

@@ -8,7 +8,7 @@ import (
 	"net/http"
 )
 
-func (s *Server) doRequest(method string, path string, data []byte, headers map[string]string) ([]byte, error) {
+func (s *Server) doRequest(method string, path string, data []byte, headers map[string]string) ([]byte, int, error) {
 
 	var req *http.Request
 	var err error
@@ -20,10 +20,10 @@ func (s *Server) doRequest(method string, path string, data []byte, headers map[
 	} else if method == http.MethodDelete {
 		req, err = http.NewRequest(http.MethodDelete, path, bytes.NewBuffer(data))
 	} else {
-		return nil, fmt.Errorf("method don't supported")
+		return nil, 0, fmt.Errorf("method don't supported")
 	}
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	for k, v := range headers {
@@ -34,19 +34,19 @@ func (s *Server) doRequest(method string, path string, data []byte, headers map[
 	res, err = http.DefaultClient.Do(req)
 
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	log.Printf("got %d status code from %s", res.StatusCode, path)
 
 	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	return body, nil
+	return body, res.StatusCode, nil
 }
 
-func (s *Server) requestContent(method string, path string, data []byte, headers map[string]string) ([]byte, error) {
+func (s *Server) requestContent(method string, path string, data []byte, headers map[string]string) ([]byte, int, error) {
 	fullPath := s.contentURL + path
 	return s.doRequest(method, fullPath, data, headers)
 }
